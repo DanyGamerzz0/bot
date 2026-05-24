@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, EmbedBuilder } from "discord.js";
+import { Client, GatewayIntentBits } from "discord.js";
 
 const client = new Client({
   intents: [
@@ -33,11 +33,10 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    // Parse expiry from Discord's CDN URL params
-    const expiry = getExpiry(jsonFile.url);
+    const expiry  = getExpiry(jsonFile.url);
+    const content = buildMessage(jsonFile.url, jsonFile.name, meta, expiry);
 
-    const embed = buildEmbed(jsonFile.url, jsonFile.name, meta, expiry);
-    await message.reply({ embeds: [embed] });
+    await message.reply({ content, allowedMentions: { repliedUser: false } });
 
     await pinThreadStarter(message.channel);
   } catch (err) {
@@ -63,16 +62,13 @@ async function pinThreadStarter(thread) {
 }
 
 // ── Parse & validate macro JSON ───────────────────────────────────────────────
-// A valid macro must be a non-empty array where at least one entry has a "Type" field.
 
 function parseMacro(jsonText) {
   try {
     const data = JSON.parse(jsonText);
 
-    // Must be a non-empty array
     if (!Array.isArray(data) || data.length === 0) return null;
 
-    // At least one action must have a "Type" field (macro signature)
     const hasType = data.some(
       (action) => action && typeof action.Type === "string"
     );
@@ -95,36 +91,34 @@ function parseMacro(jsonText) {
   }
 }
 
-// ── Extract expiry date from Discord CDN URL ──────────────────────────────────
-// The "ex" param is a Unix hex timestamp of when the URL expires.
+// ── Extract expiry from Discord CDN URL ───────────────────────────────────────
 
 function getExpiry(url) {
   try {
     const ex = new URL(url).searchParams.get("ex");
     if (!ex) return null;
-    const ts = parseInt(ex, 16) * 1000;
-    return new Date(ts);
+    return new Date(parseInt(ex, 16) * 1000);
   } catch {
     return null;
   }
 }
 
-// ── Build embed ───────────────────────────────────────────────────────────────
+// ── Build plain message ───────────────────────────────────────────────────────
 
-function buildEmbed(url, filename, meta, expiry) {
-  const expiryText = expiry
-    ? `⚠️ Link expires <t:${Math.floor(expiry.getTime() / 1000)}:R>`
-    : "⚠️ Link may expire — re-upload to refresh it";
+function buildMessage(url, filename, meta, expiry) {
+  const name = filename.replace(/\.json$/i, "");
 
-  return new EmbedBuilder()
-    .setTitle(filename.replace(/\.json$/i, ""))
-    .setURL(url)
-    .setColor(0x5865f2)
-    .addFields(
-      { name: "Steps",  value: String(meta.totalSteps), inline: true },
-      { name: "Units",  value: meta.units,              inline: true }
-    )
-    .setFooter({ text: expiryText });
+  const expiryLine = expiry
+    ? `-# ⚠️ Link expires <t:${Math.floor(expiry.getTime() / 1000)}:D>`
+    : `-# ⚠️ Link may expire — re-upload to refresh it`;
+
+  return [
+    `-# Required Units: ${meta.units}`,
+    `-# Steps: ${meta.totalSteps}`,
+    `[${name}](${url})`,
+    `[Click here to access the macro (Mobile)](${url})`,
+    expiryLine,
+  ].join("\n");
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
