@@ -4,7 +4,7 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent, // required to see attachments + content
+    GatewayIntentBits.MessageContent,
   ],
 });
 
@@ -13,37 +13,38 @@ client.once("ready", () => {
 });
 
 client.on("messageCreate", async (message) => {
-  // Ignore bots and messages outside threads
   if (message.author.bot) return;
   if (!message.channel.isThread()) return;
 
-  // Look for a .json attachment
   const jsonFile = message.attachments.find((a) =>
     a.name?.toLowerCase().endsWith(".json")
   );
   if (!jsonFile) return;
 
   try {
-    // 1. Fetch and parse the macro
-    const res = await fetch(jsonFile.url);
+    const res  = await fetch(jsonFile.url);
     const text = await res.text();
     const meta = parseMacro(text);
 
-    // 2. If the file is invalid, send the error message and stop
     if (meta === null) {
-      await message.reply("Macro is invalid/corrupted. Copying to clipboard is not recommended.");
+      await message.reply(
+        "Macro is invalid/corrupted — copying to clipboard is not recommended."
+      );
       return;
     }
 
-    // 3. Reply to the message with an embed
-    const embed = buildEmbed(jsonFile.url, jsonFile.name, meta);
+    // Parse expiry from Discord's CDN URL params
+    const expiry = getExpiry(jsonFile.url);
+
+    const embed = buildEmbed(jsonFile.url, jsonFile.name, meta, expiry);
     await message.reply({ embeds: [embed] });
 
-    // 4. Pin the first (starter) message of the thread
     await pinThreadStarter(message.channel);
   } catch (err) {
     console.error("Error handling macro upload:", err);
-    await message.reply("⚠️ Something went wrong processing that file.").catch(() => {});
+    await message
+      .reply("⚠️ Something went wrong processing that file.")
+      .catch(() => {});
   }
 });
 
@@ -51,71 +52,79 @@ client.on("messageCreate", async (message) => {
 
 async function pinThreadStarter(thread) {
   try {
-    // The starter message is the one that opened the thread
     const starter = await thread.fetchStarterMessage();
     if (!starter) return;
-
-    // Don't try to pin if it's already pinned
     const pins = await thread.messages.fetchPinned();
     if (pins.has(starter.id)) return;
-
     await starter.pin();
   } catch (err) {
-    // Missing Permissions or other Discord errors — log and move on
     console.warn("Could not pin starter message:", err.message);
   }
 }
 
-// ── Parse macro JSON ──────────────────────────────────────────────────────────
+// ── Parse & validate macro JSON ───────────────────────────────────────────────
+// A valid macro must be a non-empty array where at least one entry has a "Type" field.
 
 function parseMacro(jsonText) {
   try {
     const data = JSON.parse(jsonText);
-    const actions = Array.isArray(data) ? data : [];
 
-    const totalSteps = actions.length || data.totalSteps || "Unknown";
+    // Must be a non-empty array
+    if (!Array.isArray(data) || data.length === 0) return null;
+
+    // At least one action must have a "Type" field (macro signature)
+    const hasType = data.some(
+      (action) => action && typeof action.Type === "string"
+    );
+    if (!hasType) return null;
+
+    const totalSteps = data.length;
 
     const unitSet = new Set();
-    for (const action of actions) {
+    for (const action of data) {
       if (action.Type === "spawn_unit" && action.Unit) {
         unitSet.add(action.Unit.replace(/ #\d+$/, ""));
       }
     }
 
-    const units =
-      unitSet.size > 0 ? [...unitSet].join(", ") : "None found";
+    const units = unitSet.size > 0 ? [...unitSet].join(", ") : "None";
 
     return { totalSteps, units };
   } catch {
-    return null; // signals invalid/corrupted file
+    return null;
   }
 }
 
-// ── Build the Discord embed ───────────────────────────────────────────────────
+// ── Extract expiry date from Discord CDN URL ──────────────────────────────────
+// The "ex" param is a Unix hex timestamp of when the URL expires.
 
-function buildEmbed(url, filename, meta) {
+function getExpiry(url) {
+  try {
+    const ex = new URL(url).searchParams.get("ex");
+    if (!ex) return null;
+    const ts = parseInt(ex, 16) * 1000;
+    return new Date(ts);
+  } catch {
+    return null;
+  }
+}
+
+// ── Build embed ───────────────────────────────────────────────────────────────
+
+function buildEmbed(url, filename, meta, expiry) {
+  const expiryText = expiry
+    ? `⚠️ Link expires <t:${Math.floor(expiry.getTime() / 1000)}:R>`
+    : "⚠️ Link may expire — re-upload to refresh it";
+
   return new EmbedBuilder()
-    .setTitle("Macro uploaded")
+    .setTitle(filename.replace(/\.json$/i, ""))
+    .setURL(url)
     .setColor(0x5865f2)
     .addFields(
-      {
-        name: "Download link",
-        value: `[${filename}](${url})\n\`\`\`\n${url}\n\`\`\``,
-        inline: false,
-      },
-      {
-        name: "Total steps",
-        value: String(meta.totalSteps),
-        inline: true,
-      },
-      {
-        name: "Units",
-        value: meta.units,
-        inline: false,
-      }
+      { name: "Steps",  value: String(meta.totalSteps), inline: true },
+      { name: "Units",  value: meta.units,              inline: true }
     )
-    .setFooter({ text: "https://discord.gg/cYKnXE2Nf8" })
-    .setTimestamp();
+    .setFooter({ text: expiryText });
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
