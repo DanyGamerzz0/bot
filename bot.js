@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, EmbedBuilder } from "discord.js";
+import { Client, GatewayIntentBits } from "discord.js";
 
 const client = new Client({
   intents: [
@@ -33,10 +33,10 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    const expiry = getExpiry(jsonFile.url);
-    const embed  = buildEmbed(jsonFile.url, jsonFile.name, meta, expiry);
+    const expiry  = getExpiry(jsonFile.url);
+    const content = buildMessage(jsonFile.url, meta, expiry);
 
-    await message.reply({ embeds: [embed], allowedMentions: { repliedUser: false } });
+    await message.reply({ content, allowedMentions: { repliedUser: false } });
 
     await pinThreadStarter(message.channel);
   } catch (err) {
@@ -103,15 +103,16 @@ function getExpiry(url) {
   }
 }
 
-// ── Build embed ───────────────────────────────────────────────────────────────
+// ── Build plain message matching the screenshot layout ────────────────────────
 
-function buildEmbed(url, filename, meta, expiry) {
-  const expiryTimestamp = expiry
+function buildMessage(url, meta, expiry) {
+  const expiryText = expiry
     ? `<t:${Math.floor(expiry.getTime() / 1000)}:R>`
     : "soon";
 
-  const description = [
-    `This URL will expire **${expiryTimestamp}**, which will prevent you from importing the macro via this link.`,
+  return [
+    `**Macro's File Import URL**`,
+    `This URL will expire **${expiryText}**, which will prevent you from importing the macro via this link.`,
     `If it expires, you need to get a new Import URL by re-uploading the macro or copying the download link from the original macro file.`,
     ``,
     `Required Unit: ${meta.units}`,
@@ -121,11 +122,6 @@ function buildEmbed(url, filename, meta, expiry) {
     `\`\`\``,
     `For mobile users: [Click here](${url}) to access the file.`,
   ].join("\n");
-
-  return new EmbedBuilder()
-    .setTitle("Macro's File Import URL")
-    .setDescription(description)
-    .setColor(0x5865f2);
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
