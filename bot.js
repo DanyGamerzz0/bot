@@ -1,15 +1,3 @@
-// Macro Upload Bot — discord.js v14
-// Requires: npm install discord.js
-//
-// Discord Developer Portal setup:
-//   1. Bot > Enable "Message Content Intent"
-//   2. Bot > Copy your TOKEN
-//   3. OAuth2 > URL Generator: scopes = bot, permissions = Read Messages,
-//      Send Messages, Embed Links, Manage Messages (for pinning), Read Message History
-//
-// Environment variables (set on Railway / Render / .env):
-//   DISCORD_TOKEN   — your bot token
-
 import { Client, GatewayIntentBits, EmbedBuilder } from "discord.js";
 
 const client = new Client({
@@ -41,11 +29,17 @@ client.on("messageCreate", async (message) => {
     const text = await res.text();
     const meta = parseMacro(text);
 
-    // 2. Reply to the message with an embed
+    // 2. If the file is invalid, send the error message and stop
+    if (meta === null) {
+      await message.reply("Macro is invalid/corrupted. Copying to clipboard is not recommended.");
+      return;
+    }
+
+    // 3. Reply to the message with an embed
     const embed = buildEmbed(jsonFile.url, jsonFile.name, meta);
     await message.reply({ embeds: [embed] });
 
-    // 3. Pin the first (starter) message of the thread
+    // 4. Pin the first (starter) message of the thread
     await pinThreadStarter(message.channel);
   } catch (err) {
     console.error("Error handling macro upload:", err);
@@ -93,7 +87,7 @@ function parseMacro(jsonText) {
 
     return { totalSteps, units };
   } catch {
-    return { totalSteps: "Unknown", units: "Could not parse file" };
+    return null; // signals invalid/corrupted file
   }
 }
 
