@@ -42,7 +42,7 @@ client.on("messageCreate", async (message) => {
   } catch (err) {
     console.error("Error handling macro upload:", err);
     await message
-      .reply("⚠️ Something went wrong processing that file.")
+      .reply("Something went wrong processing that file.")
       .catch(() => {});
   }
 });
@@ -112,15 +112,14 @@ function buildMessage(url, meta, expiry) {
 
   return [
     `**Macro's File Import URL**`,
-    `This URL will expire **${expiryText}**, which will prevent you from importing the macro via this link.`,
-    `If it expires, you need to get a new Import URL by re-uploading the macro or copying the download link from the original macro file.`,
+    `This URL will expire **${expiryText}**, which will prevent you from using this link to import the macro.`,
+    `When it expires, you need to re-upload the macro.`,
     ``,
-    `Required Unit: ${meta.units}`,
-    ``,
+    `Required Unit(s): ${meta.units}`,
     `\`\`\``,
     url,
     `\`\`\``,
-    `For mobile users: [Click here](${url}) to access the file.`,
+    `Download Link (Mobile): [Click here](${url}) to download the file.`,
   ].join("\n");
 }
 
