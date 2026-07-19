@@ -112,8 +112,6 @@ function buildMessage(url, meta, expiry) {
 
   return [
     `**Macro's File Import URL**`,
-    `This URL will expire **${expiryText}**, which will prevent you from using this link to import the macro.`,
-    `When it expires, you need to re-upload the macro.`,
     ``,
     `Required Unit(s): ${meta.units}`,
     `\`\`\``,
