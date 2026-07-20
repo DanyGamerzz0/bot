@@ -1,13 +1,18 @@
-import { Client, GatewayIntentBits } from "discord.js";
+import {
+  Client,
+  EmbedBuilder,
+  GatewayIntentBits,
+} from "discord.js";
 
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID;
 
-if (!process.env.DISCORD_TOKEN) {
-  throw new Error("bot token missing");
+if (!DISCORD_TOKEN) {
+  throw new Error("Missing DISCORD_TOKEN environment variable.");
 }
 
 if (!CHANNEL_ID) {
-  throw new Error("channel missing");
+  throw new Error("Missing CHANNEL_ID environment variable.");
 }
 
 const client = new Client({
@@ -19,7 +24,8 @@ const client = new Client({
 });
 
 client.once("ready", (readyClient) => {
-  console.log(`Ready`);
+  console.log(`Logged in as ${readyClient.user.tag}`);
+  console.log(`Monitoring channel ${CHANNEL_ID} and all threads under it.`);
 });
 
 client.on("messageCreate", async (message) => {
@@ -45,7 +51,7 @@ client.on("messageCreate", async (message) => {
 
       if (!response.ok) {
         throw new Error(
-          `Failed: ${attachment.name}: HTTP ${response.status}`
+          `Failed to download attachment: HTTP ${response.status}`
         );
       }
 
@@ -55,7 +61,7 @@ client.on("messageCreate", async (message) => {
       if (!macroInfo) {
         await message.reply({
           content:
-            `**${sanitizeFilename(attachment.name)}** is not a valid macro file.\n`,
+            "This is not a valid macro file. The file must contain a non-empty array of actions.",
           allowedMentions: {
             repliedUser: false,
           },
@@ -64,20 +70,20 @@ client.on("messageCreate", async (message) => {
         continue;
       }
 
+      const embed = buildEmbed(attachment.url, macroInfo);
+
       await message.reply({
-        content: buildMessage(attachment, macroInfo),
+        embeds: [embed],
         allowedMentions: {
           repliedUser: false,
         },
       });
     } catch (error) {
-      console.error(`Error: ${attachment.name}:`, error);
+      console.error("Error processing macro file:", error);
 
       await message
         .reply({
-          content: `Error: **${sanitizeFilename(
-            attachment.name
-          )}**.`,
+          content: "Something went wrong while processing the macro.",
           allowedMentions: {
             repliedUser: false,
           },
@@ -99,59 +105,67 @@ function parseMacro(jsonText) {
       (action) =>
         action &&
         typeof action === "object" &&
-        typeof action.Type === "string" &&
-        action.Type.trim().length > 0
+        typeof action.Type === "string"
     );
 
     if (validActions.length === 0) {
       return null;
     }
 
-    const unitSet = new Set();
+    const units = new Set();
 
     for (const action of validActions) {
+      const actionType = action.Type.trim().toLowerCase();
+
       if (
-        action.Type === "spawn_unit" &&
-        typeof action.Unit === "string" &&
-        action.Unit.trim().length > 0
+        actionType === "place" &&
+        typeof action.Label === "string" &&
+        action.Label.trim()
       ) {
-        const unitName = action.Unit.replace(/ #\d+$/, "").trim();
+        const unitName = cleanUnitName(action.Label);
 
         if (unitName) {
-          unitSet.add(unitName);
+          units.add(unitName);
         }
       }
     }
 
     return {
       totalSteps: actions.length,
-      units: unitSet.size > 0 ? [...unitSet].join(", ") : "None",
+      units: units.size > 0 ? [...units].join(", ") : "None detected",
     };
   } catch {
     return null;
   }
 }
 
-function buildMessage(attachment, macroInfo) {
-  const filename = sanitizeFilename(attachment.name);
-
-  return [
-    "## Macro Formatter",
-    "",
-    `**File:** \`${filename}\``,
-    `**Total actions:** ${macroInfo.totalSteps}`,
-    `**Required units:** ${macroInfo.units}`,
-    "",
-    "**URL:**",
-    "```text",
-    attachment.url,
-    "```",
-    `[Download ${filename}](${attachment.url})`,
-  ].join("\n");
+function cleanUnitName(label) {
+  return label
+    .replace(/ #\d+$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function sanitizeFilename(filename = "macro.json") {
-  return filename.replaceAll("`", "").replaceAll("[", "").replaceAll("]", "");
+function buildEmbed(url, macroInfo) {
+  return new EmbedBuilder()
+    .setTitle("Macro Formatter")
+    .addFields(
+      {
+        name: "Total actions",
+        value: String(macroInfo.totalSteps),
+        inline: true,
+      },
+      {
+        name: "Required units",
+        value: macroInfo.units,
+        inline: true,
+      },
+      {
+        name: "URL",
+        value: `\`\`\`text\n${url}\n\`\`\`\n[Download Macro](${url})`,
+        inline: false,
+      }
+    );
 }
 
-client.login(process.env.DISCORD_TOKEN);
+client.login(DISCORD_TOKEN);
