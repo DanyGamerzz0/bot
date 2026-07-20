@@ -1,5 +1,15 @@
 import { Client, GatewayIntentBits } from "discord.js";
 
+const CHANNEL_ID = process.env.CHANNEL_ID;
+
+if (!process.env.DISCORD_TOKEN) {
+  throw new Error("bot token missing");
+}
+
+if (!CHANNEL_ID) {
+  throw new Error("channel missing");
+}
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -8,119 +18,140 @@ const client = new Client({
   ],
 });
 
-client.once("ready", () => {
-  console.log(`Logged in as ${client.user.tag}`);
+client.once("ready", (readyClient) => {
+  console.log(`Ready`);
 });
 
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
-  if (!message.channel.isThread()) return;
 
-  const jsonFile = message.attachments.find((a) =>
-    a.name?.toLowerCase().endsWith(".json")
+  const isMainChannel = message.channel.id === CHANNEL_ID;
+
+  const isThreadUnderChannel =
+    message.channel.isThread() &&
+    message.channel.parentId === CHANNEL_ID;
+
+  if (!isMainChannel && !isThreadUnderChannel) return;
+
+  const jsonAttachments = message.attachments.filter((attachment) =>
+    attachment.name?.toLowerCase().endsWith(".json")
   );
-  if (!jsonFile) return;
 
-  try {
-    const res  = await fetch(jsonFile.url);
-    const text = await res.text();
-    const meta = parseMacro(text);
+  if (jsonAttachments.size === 0) return;
 
-    if (meta === null) {
-      await message.reply(
-        "Macro is invalid/corrupted — copying to clipboard is not recommended."
-      );
-      return;
+  for (const attachment of jsonAttachments.values()) {
+    try {
+      const response = await fetch(attachment.url);
+
+      if (!response.ok) {
+        throw new Error(
+          `Failed: ${attachment.name}: HTTP ${response.status}`
+        );
+      }
+
+      const jsonText = await response.text();
+      const macroInfo = parseMacro(jsonText);
+
+      if (!macroInfo) {
+        await message.reply({
+          content:
+            `**${sanitizeFilename(attachment.name)}** is not a valid macro file.\n`,
+          allowedMentions: {
+            repliedUser: false,
+          },
+        });
+
+        continue;
+      }
+
+      await message.reply({
+        content: buildMessage(attachment, macroInfo),
+        allowedMentions: {
+          repliedUser: false,
+        },
+      });
+    } catch (error) {
+      console.error(`Error: ${attachment.name}:`, error);
+
+      await message
+        .reply({
+          content: `Error: **${sanitizeFilename(
+            attachment.name
+          )}**.`,
+          allowedMentions: {
+            repliedUser: false,
+          },
+        })
+        .catch(() => {});
     }
-
-    const expiry  = getExpiry(jsonFile.url);
-    const content = buildMessage(jsonFile.url, meta, expiry);
-
-    await message.reply({ content, allowedMentions: { repliedUser: false } });
-
-    await pinThreadStarter(message.channel);
-  } catch (err) {
-    console.error("Error handling macro upload:", err);
-    await message
-      .reply("Something went wrong processing that file.")
-      .catch(() => {});
   }
 });
 
-// ── Pin the thread's first message ───────────────────────────────────────────
-
-async function pinThreadStarter(thread) {
-  try {
-    const starter = await thread.fetchStarterMessage();
-    if (!starter) return;
-    const pins = await thread.messages.fetchPinned();
-    if (pins.has(starter.id)) return;
-    await starter.pin();
-  } catch (err) {
-    console.warn("Could not pin starter message:", err.message);
-  }
-}
-
-// ── Parse & validate macro JSON ───────────────────────────────────────────────
-
 function parseMacro(jsonText) {
   try {
-    const data = JSON.parse(jsonText);
+    const actions = JSON.parse(jsonText);
 
-    if (!Array.isArray(data) || data.length === 0) return null;
+    if (!Array.isArray(actions) || actions.length === 0) {
+      return null;
+    }
 
-    const hasType = data.some(
-      (action) => action && typeof action.Type === "string"
+    const validActions = actions.filter(
+      (action) =>
+        action &&
+        typeof action === "object" &&
+        typeof action.Type === "string" &&
+        action.Type.trim().length > 0
     );
-    if (!hasType) return null;
 
-    const totalSteps = data.length;
+    if (validActions.length === 0) {
+      return null;
+    }
 
     const unitSet = new Set();
-    for (const action of data) {
-      if (action.Type === "spawn_unit" && action.Unit) {
-        unitSet.add(action.Unit.replace(/ #\d+$/, ""));
+
+    for (const action of validActions) {
+      if (
+        action.Type === "spawn_unit" &&
+        typeof action.Unit === "string" &&
+        action.Unit.trim().length > 0
+      ) {
+        const unitName = action.Unit.replace(/ #\d+$/, "").trim();
+
+        if (unitName) {
+          unitSet.add(unitName);
+        }
       }
     }
 
-    const units = unitSet.size > 0 ? [...unitSet].join(", ") : "None";
-
-    return { totalSteps, units };
+    return {
+      totalSteps: actions.length,
+      units: unitSet.size > 0 ? [...unitSet].join(", ") : "None",
+    };
   } catch {
     return null;
   }
 }
 
-// ── Extract expiry from Discord CDN URL ───────────────────────────────────────
-
-function getExpiry(url) {
-  try {
-    const ex = new URL(url).searchParams.get("ex");
-    if (!ex) return null;
-    return new Date(parseInt(ex, 16) * 1000);
-  } catch {
-    return null;
-  }
-}
-
-// ── Build plain message matching the screenshot layout ────────────────────────
-
-function buildMessage(url, meta, expiry) {
-  const expiryText = expiry
-    ? `<t:${Math.floor(expiry.getTime() / 1000)}:R>`
-    : "soon";
+function buildMessage(attachment, macroInfo) {
+  const filename = sanitizeFilename(attachment.name);
 
   return [
-    `**Macro's File Import URL**`,
-    ``,
-    `Required Unit(s): ${meta.units}`,
-    `\`\`\``,
-    url,
-    `\`\`\``,
-    `Download Link (Mobile): [Click here](${url}) to download the file.`,
+    "## Macro Formatter",
+    "",
+    `**File:** \`${filename}\``,
+    `**Total actions:** ${macroInfo.totalSteps}`,
+    `**Required units:** ${macroInfo.units}`,
+    "",
+    "**URL:**",
+    "```text",
+    attachment.url,
+    "```",
+    `[Download ${filename}](${attachment.url})`,
   ].join("\n");
 }
 
-// ── Start ─────────────────────────────────────────────────────────────────────
+function sanitizeFilename(filename = "macro.json") {
+  return filename.replaceAll("`", "").replaceAll("[", "").replaceAll("]", "");
+}
 
 client.login(process.env.DISCORD_TOKEN);
