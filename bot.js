@@ -162,7 +162,13 @@ function buildEmbed(url, macroInfo) {
       },
       {
         name: "URL",
-        value: `\`\`\`text\n${url}\n\`\`\`\n[Download Macro](${url})`,
+        value: [
+          "```text",
+          url,
+          "```",
+          "**For Mobile Users:**",
+          `[Download Macro](${url})`,
+        ].join("\n"),
         inline: false,
       }
     );
