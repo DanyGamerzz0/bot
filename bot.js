@@ -47,18 +47,29 @@ const uploadCommand = new SlashCommandBuilder()
       .setRequired(false)
   );
 
-client.once("ready", async (readyClient) => {
+client.once("clientReady", async (readyClient) => {
   console.log(`Logged in as ${readyClient.user.tag}`);
   console.log(
     `Monitoring ${ALLOWED_CHANNEL_IDS.size} allowed channel(s) and their threads.`
   );
 
   try {
-    await readyClient.application.commands.set([
-      uploadCommand.toJSON(),
-    ]);
+    const commandData = [uploadCommand.toJSON()];
 
-    console.log("Registered /upload command.");
+    await readyClient.application.commands.set([]);
+
+    for (const guild of readyClient.guilds.cache.values()) {
+      const commands = await guild.commands.set(commandData);
+
+      console.log(
+        `Registered commands in ${guild.name}:`,
+        commands.map((command) => ({
+          name: command.name,
+          description: command.description,
+          options: command.options.map((option) => option.name),
+        }))
+      );
+    }
   } catch (error) {
     console.error("Could not register slash command:", error);
   }
