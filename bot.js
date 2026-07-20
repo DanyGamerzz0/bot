@@ -2,6 +2,7 @@ import {
   Client,
   EmbedBuilder,
   GatewayIntentBits,
+  SlashCommandBuilder,
 } from "discord.js";
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
@@ -29,23 +30,43 @@ const client = new Client({
   ],
 });
 
-client.once("ready", (readyClient) => {
+const uploadCommand = new SlashCommandBuilder()
+  .setName("upload")
+  .setDescription("Upload and format a macro file")
+  .addAttachmentOption((option) =>
+    option
+      .setName("file")
+      .setDescription("The macro JSON file")
+      .setRequired(true)
+  )
+  .addStringOption((option) =>
+    option
+      .setName("note")
+      .setDescription("Optional note to display with the macro")
+      .setMaxLength(1000)
+      .setRequired(false)
+  );
+
+client.once("ready", async (readyClient) => {
   console.log(`Logged in as ${readyClient.user.tag}`);
   console.log(
     `Monitoring ${ALLOWED_CHANNEL_IDS.size} allowed channel(s) and their threads.`
   );
+
+  try {
+    await readyClient.application.commands.set([
+      uploadCommand.toJSON(),
+    ]);
+
+    console.log("Registered /upload command.");
+  } catch (error) {
+    console.error("Could not register slash command:", error);
+  }
 });
 
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
-
-  const isAllowedChannel = ALLOWED_CHANNEL_IDS.has(message.channel.id);
-
-  const isThreadInAllowedChannel =
-    message.channel.isThread() &&
-    ALLOWED_CHANNEL_IDS.has(message.channel.parentId);
-
-  if (!isAllowedChannel && !isThreadInAllowedChannel) return;
+  if (!isAllowedLocation(message.channel)) return;
 
   const jsonAttachments = message.attachments.filter((attachment) =>
     attachment.name?.toLowerCase().endsWith(".json")
@@ -55,16 +76,7 @@ client.on("messageCreate", async (message) => {
 
   for (const attachment of jsonAttachments.values()) {
     try {
-      const response = await fetch(attachment.url);
-
-      if (!response.ok) {
-        throw new Error(
-          `Failed to download attachment: HTTP ${response.status}`
-        );
-      }
-
-      const jsonText = await response.text();
-      const macroInfo = parseMacro(jsonText);
+      const macroInfo = await downloadAndParseMacro(attachment);
 
       if (!macroInfo) {
         await message.reply({
@@ -78,10 +90,8 @@ client.on("messageCreate", async (message) => {
         continue;
       }
 
-      const embed = buildEmbed(attachment.url, macroInfo);
-
       await message.reply({
-        embeds: [embed],
+        embeds: [buildEmbed(attachment.url, macroInfo)],
         allowedMentions: {
           repliedUser: false,
         },
@@ -104,6 +114,85 @@ client.on("messageCreate", async (message) => {
     }
   }
 });
+
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+  if (interaction.commandName !== "upload") return;
+
+  if (!interaction.channel || !isAllowedLocation(interaction.channel)) {
+    await interaction.reply({
+      content: "This command cannot be used in this channel.",
+      ephemeral: true,
+    });
+
+    return;
+  }
+
+  const attachment = interaction.options.getAttachment("file", true);
+  const note = interaction.options.getString("note")?.trim() || null;
+
+  if (!attachment.name?.toLowerCase().endsWith(".json")) {
+    await interaction.reply({
+      content: "Please upload a file ending in `.json`.",
+      ephemeral: true,
+    });
+
+    return;
+  }
+
+  await interaction.deferReply();
+
+  try {
+    const macroInfo = await downloadAndParseMacro(attachment);
+
+    if (!macroInfo) {
+      await interaction.editReply({
+        content:
+          "This is not a valid macro file. The file must contain a non-empty array of actions.",
+      });
+
+      return;
+    }
+
+    await interaction.editReply({
+      embeds: [buildEmbed(attachment.url, macroInfo, note)],
+    });
+
+    if (interaction.channel.isThread()) {
+      await pinThreadStarter(interaction.channel);
+    }
+  } catch (error) {
+    console.error("Error processing slash-command upload:", error);
+
+    await interaction.editReply({
+      content: "Something went wrong while processing the macro.",
+    });
+  }
+});
+
+function isAllowedLocation(channel) {
+  const isAllowedChannel = ALLOWED_CHANNEL_IDS.has(channel.id);
+
+  const isThreadInAllowedChannel =
+    channel.isThread() &&
+    ALLOWED_CHANNEL_IDS.has(channel.parentId);
+
+  return isAllowedChannel || isThreadInAllowedChannel;
+}
+
+async function downloadAndParseMacro(attachment) {
+  const response = await fetch(attachment.url);
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to download attachment: HTTP ${response.status}`
+    );
+  }
+
+  const jsonText = await response.text();
+
+  return parseMacro(jsonText);
+}
 
 function parseMacro(jsonText) {
   try {
@@ -158,8 +247,8 @@ function cleanUnitName(label) {
     .trim();
 }
 
-function buildEmbed(url, macroInfo) {
-  return new EmbedBuilder()
+function buildEmbed(url, macroInfo, note = null) {
+  const embed = new EmbedBuilder()
     .setTitle("Macro Formatter")
     .addFields(
       {
@@ -184,6 +273,16 @@ function buildEmbed(url, macroInfo) {
         inline: false,
       }
     );
+
+  if (note) {
+    embed.addFields({
+      name: "Note from the user:",
+      value: note,
+      inline: false,
+    });
+  }
+
+  return embed;
 }
 
 async function pinThreadStarter(thread) {
