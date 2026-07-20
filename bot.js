@@ -87,6 +87,9 @@ if (!isAllowedChannel && !isThreadInAllowedChannel) return;
           repliedUser: false,
         },
       });
+      if (message.channel.isThread()) {
+      await pinThreadStarter(message.channel);
+    }
     } catch (error) {
       console.error("Error processing macro file:", error);
 
@@ -182,5 +185,22 @@ function buildEmbed(url, macroInfo) {
       }
     );
 }
+async function pinThreadStarter(thread) {
+  try {
+    const starterMessage = await thread.fetchStarterMessage();
 
+    if (!starterMessage) return;
+
+    const pinnedMessages = await thread.messages.fetchPinned();
+
+    if (pinnedMessages.has(starterMessage.id)) return;
+
+    await starterMessage.pin();
+  } catch (error) {
+    console.warn(
+      `Could not pin the thread starter in ${thread.id}:`,
+      error.message
+    );
+  }
+}
 client.login(DISCORD_TOKEN);
