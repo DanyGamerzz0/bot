@@ -5,7 +5,16 @@ import {
 } from "discord.js";
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
-const CHANNEL_ID = process.env.CHANNEL_ID;
+const ALLOWED_CHANNEL_IDS = new Set(
+  (process.env.CHANNEL_IDS ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean)
+);
+
+if (ALLOWED_CHANNEL_IDS.size === 0) {
+  throw new Error("Missing CHANNEL_IDS environment variable.");
+}
 
 if (!DISCORD_TOKEN) {
   throw new Error("Missing DISCORD_TOKEN environment variable.");
@@ -31,13 +40,13 @@ client.once("ready", (readyClient) => {
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
-  const isMainChannel = message.channel.id === CHANNEL_ID;
+const isAllowedChannel = ALLOWED_CHANNEL_IDS.has(message.channel.id);
 
-  const isThreadUnderChannel =
-    message.channel.isThread() &&
-    message.channel.parentId === CHANNEL_ID;
+const isThreadInAllowedChannel =
+  message.channel.isThread() &&
+  ALLOWED_CHANNEL_IDS.has(message.channel.parentId);
 
-  if (!isMainChannel && !isThreadUnderChannel) return;
+if (!isAllowedChannel && !isThreadInAllowedChannel) return;
 
   const jsonAttachments = message.attachments.filter((attachment) =>
     attachment.name?.toLowerCase().endsWith(".json")
