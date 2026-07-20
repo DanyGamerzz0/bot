@@ -5,6 +5,7 @@ import {
 } from "discord.js";
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
+
 const ALLOWED_CHANNEL_IDS = new Set(
   (process.env.CHANNEL_IDS ?? "")
     .split(",")
@@ -12,16 +13,12 @@ const ALLOWED_CHANNEL_IDS = new Set(
     .filter(Boolean)
 );
 
-if (ALLOWED_CHANNEL_IDS.size === 0) {
-  throw new Error("Missing CHANNEL_IDS environment variable.");
-}
-
 if (!DISCORD_TOKEN) {
   throw new Error("Missing DISCORD_TOKEN environment variable.");
 }
 
-if (!CHANNEL_ID) {
-  throw new Error("Missing CHANNEL_ID environment variable.");
+if (ALLOWED_CHANNEL_IDS.size === 0) {
+  throw new Error("Missing CHANNEL_IDS environment variable.");
 }
 
 const client = new Client({
@@ -34,19 +31,21 @@ const client = new Client({
 
 client.once("ready", (readyClient) => {
   console.log(`Logged in as ${readyClient.user.tag}`);
-  console.log(`Monitoring channel ${CHANNEL_ID} and all threads under it.`);
+  console.log(
+    `Monitoring ${ALLOWED_CHANNEL_IDS.size} allowed channel(s) and their threads.`
+  );
 });
 
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
-const isAllowedChannel = ALLOWED_CHANNEL_IDS.has(message.channel.id);
+  const isAllowedChannel = ALLOWED_CHANNEL_IDS.has(message.channel.id);
 
-const isThreadInAllowedChannel =
-  message.channel.isThread() &&
-  ALLOWED_CHANNEL_IDS.has(message.channel.parentId);
+  const isThreadInAllowedChannel =
+    message.channel.isThread() &&
+    ALLOWED_CHANNEL_IDS.has(message.channel.parentId);
 
-if (!isAllowedChannel && !isThreadInAllowedChannel) return;
+  if (!isAllowedChannel && !isThreadInAllowedChannel) return;
 
   const jsonAttachments = message.attachments.filter((attachment) =>
     attachment.name?.toLowerCase().endsWith(".json")
@@ -87,9 +86,10 @@ if (!isAllowedChannel && !isThreadInAllowedChannel) return;
           repliedUser: false,
         },
       });
+
       if (message.channel.isThread()) {
-      await pinThreadStarter(message.channel);
-    }
+        await pinThreadStarter(message.channel);
+      }
     } catch (error) {
       console.error("Error processing macro file:", error);
 
@@ -185,6 +185,7 @@ function buildEmbed(url, macroInfo) {
       }
     );
 }
+
 async function pinThreadStarter(thread) {
   try {
     const starterMessage = await thread.fetchStarterMessage();
@@ -203,4 +204,5 @@ async function pinThreadStarter(thread) {
     );
   }
 }
+
 client.login(DISCORD_TOKEN);
