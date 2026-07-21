@@ -15,11 +15,11 @@ const ALLOWED_CHANNEL_IDS = new Set(
 );
 
 if (!DISCORD_TOKEN) {
-  throw new Error("Missing DISCORD_TOKEN environment variable.");
+  throw new Error("missing variable 1");
 }
 
 if (ALLOWED_CHANNEL_IDS.size === 0) {
-  throw new Error("Missing CHANNEL_IDS environment variable.");
+  throw new Error("missing variable 2");
 }
 
 const client = new Client({
@@ -50,7 +50,7 @@ const uploadCommand = new SlashCommandBuilder()
 client.once("clientReady", async (readyClient) => {
   console.log(`Logged in as ${readyClient.user.tag}`);
   console.log(
-    `Monitoring ${ALLOWED_CHANNEL_IDS.size} allowed channel(s) and their threads.`
+    `Monitoring ${ALLOWED_CHANNEL_IDS.size} allowed channels...`
   );
 
   try {
@@ -79,20 +79,29 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
   if (!isAllowedLocation(message.channel)) return;
 
-  const jsonAttachments = message.attachments.filter((attachment) =>
+  const attachments = [...message.attachments.values()];
+
+  const jsonAttachments = attachments.filter((attachment) =>
     attachment.name?.toLowerCase().endsWith(".json")
   );
 
-  if (jsonAttachments.size === 0) return;
+  const containsOnlyJsonFiles =
+    attachments.length > 0 &&
+    jsonAttachments.length === attachments.length;
 
-  for (const attachment of jsonAttachments.values()) {
+  if (!containsOnlyJsonFiles) {
+    await deleteNonJsonMessage(message);
+    return;
+  }
+
+  for (const attachment of jsonAttachments) {
     try {
       const macroInfo = await downloadAndParseMacro(attachment);
 
       if (!macroInfo) {
         await message.reply({
           content:
-            "This is not a valid macro file. The file must contain a non-empty array of actions.",
+            "This is not a valid macro file.",
           allowedMentions: {
             repliedUser: false,
           },
@@ -112,11 +121,11 @@ client.on("messageCreate", async (message) => {
         await pinThreadStarter(message.channel);
       }
     } catch (error) {
-      console.error("Error processing macro file:", error);
+      console.error("Error: ", error);
 
       await message
         .reply({
-          content: "Something went wrong while processing the macro.",
+          content: "Something went wrong...",
           allowedMentions: {
             repliedUser: false,
           },
@@ -132,7 +141,7 @@ client.on("interactionCreate", async (interaction) => {
 
   if (!interaction.channel || !isAllowedLocation(interaction.channel)) {
     await interaction.reply({
-      content: "This command cannot be used in this channel.",
+      content: "This command cannot be used here.",
       ephemeral: true,
     });
 
@@ -159,7 +168,7 @@ client.on("interactionCreate", async (interaction) => {
     if (!macroInfo) {
       await interaction.editReply({
         content:
-          "This is not a valid macro file. The file must contain a non-empty array of actions.",
+          "This is not a valid macro file.",
       });
 
       return;
@@ -173,10 +182,10 @@ client.on("interactionCreate", async (interaction) => {
       await pinThreadStarter(interaction.channel);
     }
   } catch (error) {
-    console.error("Error processing slash-command upload:", error);
+    console.error("Error processing slash command: ", error);
 
     await interaction.editReply({
-      content: "Something went wrong while processing the macro.",
+      content: "Something went wrong...",
     });
   }
 });
@@ -185,10 +194,31 @@ function isAllowedLocation(channel) {
   const isAllowedChannel = ALLOWED_CHANNEL_IDS.has(channel.id);
 
   const isThreadInAllowedChannel =
-    channel.isThread() &&
-    ALLOWED_CHANNEL_IDS.has(channel.parentId);
+    channel.isThread() && ALLOWED_CHANNEL_IDS.has(channel.parentId);
 
   return isAllowedChannel || isThreadInAllowedChannel;
+}
+
+async function deleteNonJsonMessage(message) {
+  try {
+    if (!message.deletable) {
+      console.warn(
+        `Could not delete: ${message.id}: message is not deletable.`
+      );
+      return;
+    }
+
+    await message.delete();
+
+    console.log(
+      `deleted: ${message.author.tag} in ${message.channel.id}.`
+    );
+  } catch (error) {
+    console.error(
+      `could not delete: ${message.id}:`,
+      error
+    );
+  }
 }
 
 async function downloadAndParseMacro(attachment) {
@@ -196,7 +226,7 @@ async function downloadAndParseMacro(attachment) {
 
   if (!response.ok) {
     throw new Error(
-      `Failed to download attachment: HTTP ${response.status}`
+      `Error: HTTP ${response.status}`
     );
   }
 
@@ -207,7 +237,11 @@ async function downloadAndParseMacro(attachment) {
 
 function parseMacro(jsonText) {
   try {
-    const actions = JSON.parse(jsonText);
+    const parsedData = JSON.parse(jsonText);
+
+    const actions = Array.isArray(parsedData)
+      ? parsedData
+      : parsedData?.Actions;
 
     if (!Array.isArray(actions) || actions.length === 0) {
       return null;
@@ -215,9 +249,11 @@ function parseMacro(jsonText) {
 
     const validActions = actions.filter(
       (action) =>
-        action &&
+        action !== null &&
         typeof action === "object" &&
-        typeof action.Type === "string"
+        !Array.isArray(action) &&
+        typeof action.Type === "string" &&
+        action.Type.trim().length > 0
     );
 
     if (validActions.length === 0) {
@@ -229,8 +265,12 @@ function parseMacro(jsonText) {
     for (const action of validActions) {
       const actionType = action.Type.trim().toLowerCase();
 
+      const isPlacementAction =
+        actionType === "place" ||
+        actionType === "place_phantom";
+
       if (
-        actionType === "place" &&
+        isPlacementAction &&
         typeof action.Label === "string" &&
         action.Label.trim()
       ) {
@@ -244,7 +284,7 @@ function parseMacro(jsonText) {
 
     return {
       totalSteps: actions.length,
-      units: units.size > 0 ? [...units].join(", ") : "None detected",
+      units: units.size > 0 ? [...units].join(", ") : "None",
     };
   } catch {
     return null;
@@ -309,7 +349,7 @@ async function pinThreadStarter(thread) {
     await starterMessage.pin();
   } catch (error) {
     console.warn(
-      `Could not pin the thread starter in ${thread.id}:`,
+      `could not pin thread: ${thread.id}:`,
       error.message
     );
   }
