@@ -90,7 +90,6 @@ client.on("messageCreate", async (message) => {
     jsonAttachments.length === attachments.length;
 
   if (!containsOnlyJsonFiles) {
-    await deleteNonJsonMessage(message);
     return;
   }
 
@@ -100,8 +99,7 @@ client.on("messageCreate", async (message) => {
 
       if (!macroInfo) {
         await message.reply({
-          content:
-            "This is not a valid macro file.",
+          content: "This is not a valid macro file.",
           allowedMentions: {
             repliedUser: false,
           },
@@ -167,8 +165,7 @@ client.on("interactionCreate", async (interaction) => {
 
     if (!macroInfo) {
       await interaction.editReply({
-        content:
-          "This is not a valid macro file.",
+        content: "This is not a valid macro file.",
       });
 
       return;
@@ -199,35 +196,11 @@ function isAllowedLocation(channel) {
   return isAllowedChannel || isThreadInAllowedChannel;
 }
 
-async function deleteNonJsonMessage(message) {
-  try {
-    if (!message.deletable) {
-      console.warn(
-        `Could not delete: ${message.id}: message is not deletable.`
-      );
-      return;
-    }
-
-    await message.delete();
-
-    console.log(
-      `deleted: ${message.author.tag} in ${message.channel.id}.`
-    );
-  } catch (error) {
-    console.error(
-      `could not delete: ${message.id}:`,
-      error
-    );
-  }
-}
-
 async function downloadAndParseMacro(attachment) {
   const response = await fetch(attachment.url);
 
   if (!response.ok) {
-    throw new Error(
-      `Error: HTTP ${response.status}`
-    );
+    throw new Error(`Error: HTTP ${response.status}`);
   }
 
   const jsonText = await response.text();
