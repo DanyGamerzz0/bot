@@ -9,17 +9,10 @@ import {
 } from "discord.js";
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
-const LUARMOR_API_KEY = process.env.LUARMOR_API_KEY;
-const LUARMOR_PROJECT_ID = process.env.LUARMOR_PROJECT_ID;
-const PREMIUM_ROLE_ID = process.env.PREMIUM_ROLE_ID;
-const OWNER_ID = process.env.OWNER_ID;
-
 const MAX_JSON_BYTES = 8 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 15_000;
 const RENEW_COOLDOWN_MS = 5_000;
 const RENEW_BUTTON_ID = "lixhub_renew_attachment_url";
-const PREMIUM_SYNC_INTERVAL_MS = 5 * 60 * 1000;
-const LUARMOR_BASE_URL = "https://api.luarmor.net/v3";
 
 const ALLOWED_CHANNEL_IDS = new Set(
   (process.env.CHANNEL_IDS ?? "")
@@ -34,22 +27,6 @@ if (!DISCORD_TOKEN) {
 
 if (ALLOWED_CHANNEL_IDS.size === 0) {
   throw new Error("missing variable 2");
-}
-
-if (!LUARMOR_API_KEY) {
-  throw new Error("missing LUARMOR_API_KEY");
-}
-
-if (!LUARMOR_PROJECT_ID) {
-  throw new Error("missing LUARMOR_PROJECT_ID");
-}
-
-if (!PREMIUM_ROLE_ID) {
-  throw new Error("missing PREMIUM_ROLE_ID");
-}
-
-if (!OWNER_ID) {
-  throw new Error("missing OWNER_ID");
 }
 
 const client = new Client({
@@ -99,45 +76,6 @@ const unpinMessageCommand = new SlashCommandBuilder()
       .setRequired(true)
   );
 
-const premiumWhitelistCommand = new SlashCommandBuilder()
-  .setName("premium_whitelist")
-  .setDescription("Create, replace, or extend a LixHub Premium whitelist")
-  .addUserOption((option) =>
-    option
-      .setName("user")
-      .setDescription("Discord user receiving Premium")
-      .setRequired(true)
-  )
-  .addStringOption((option) =>
-    option
-      .setName("duration")
-      .setDescription("Premium duration")
-      .setRequired(true)
-      .addChoices(
-        { name: "1 Day", value: "1_day" },
-        { name: "1 Week", value: "1_week" },
-        { name: "1 Month", value: "1_month" },
-        { name: "3 Months", value: "3_months" },
-        { name: "Lifetime", value: "lifetime" }
-      )
-  )
-  .addStringOption((option) =>
-    option
-      .setName("mode")
-      .setDescription("Extend the current key or issue a fresh replacement key")
-      .setRequired(true)
-      .addChoices(
-        { name: "Extend", value: "extend" },
-        { name: "New Key", value: "new" }
-      )
-  )
-  .addBooleanOption((option) =>
-    option
-      .setName("send_dm")
-      .setDescription("DM the key to the selected user")
-      .setRequired(true)
-  );
-
 client.once("clientReady", async (readyClient) => {
   console.log(`Logged in as ${readyClient.user.tag}`);
   console.log(`Monitoring ${ALLOWED_CHANNEL_IDS.size} allowed channels...`);
@@ -147,7 +85,6 @@ client.once("clientReady", async (readyClient) => {
       uploadCommand.toJSON(),
       pinMessageCommand.toJSON(),
       unpinMessageCommand.toJSON(),
-      premiumWhitelistCommand.toJSON(),
     ];
 
     await readyClient.application.commands.set([]);
@@ -164,16 +101,6 @@ client.once("clientReady", async (readyClient) => {
         }))
       );
     }
-
-    await syncPremiumRoles(readyClient).catch((error) => {
-      console.error("Initial Premium role sync failed:", error);
-    });
-
-    setInterval(() => {
-      syncPremiumRoles(readyClient).catch((error) => {
-        console.error("Premium role sync failed:", error);
-      });
-    }, PREMIUM_SYNC_INTERVAL_MS);
   } catch (error) {
     console.error("Could not register slash command:", error);
   }
@@ -236,11 +163,6 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   if (!interaction.isChatInputCommand()) return;
-
-  if (interaction.commandName === "premium_whitelist") {
-    await handlePremiumWhitelist(interaction);
-    return;
-  }
 
   if (
     interaction.commandName === "pin-msg" ||
@@ -306,324 +228,6 @@ client.on("interactionCreate", async (interaction) => {
     });
   }
 });
-
-const PREMIUM_DURATIONS = {
-  "1_day": { label: "1 Day", seconds: 1 * 24 * 60 * 60 },
-  "1_week": { label: "1 Week", seconds: 7 * 24 * 60 * 60 },
-  "1_month": { label: "1 Month", seconds: 30 * 24 * 60 * 60 },
-  "3_months": { label: "3 Months", seconds: 90 * 24 * 60 * 60 },
-  lifetime: { label: "Lifetime", seconds: null },
-};
-
-function luarmorHeaders() {
-  return {
-    Authorization: LUARMOR_API_KEY,
-    "Content-Type": "application/json",
-  };
-}
-
-async function luarmorRequest(path, options = {}) {
-  const response = await fetch(`${LUARMOR_BASE_URL}${path}`, {
-    ...options,
-    headers: {
-      ...luarmorHeaders(),
-      ...(options.headers ?? {}),
-    },
-  });
-
-  let data = null;
-  try {
-    data = await response.json();
-  } catch {
-    data = null;
-  }
-
-  if (!response.ok || data?.success === false) {
-    const message = data?.message || `Luarmor returned HTTP ${response.status}`;
-    const error = new Error(message);
-    error.status = response.status;
-    error.data = data;
-    throw error;
-  }
-
-  return data ?? {};
-}
-
-async function getLuarmorUsersByDiscordId(discordId) {
-  const params = new URLSearchParams({ discord_id: String(discordId) });
-  const data = await luarmorRequest(
-    `/projects/${LUARMOR_PROJECT_ID}/users?${params.toString()}`
-  );
-  return Array.isArray(data.users) ? data.users : [];
-}
-
-async function getAllPremiumLuarmorUsers() {
-  const users = [];
-  const pageSize = 100;
-
-  for (let from = 0; ; from += pageSize) {
-    const params = new URLSearchParams({
-      search: "Premium",
-      from: String(from),
-      until: String(from + pageSize),
-    });
-
-    const data = await luarmorRequest(
-      `/projects/${LUARMOR_PROJECT_ID}/users?${params.toString()}`
-    );
-    const page = Array.isArray(data.users) ? data.users : [];
-    const premiumPage = page.filter((user) => user.note === "Premium");
-    users.push(...premiumPage);
-
-    if (page.length < pageSize) break;
-  }
-
-  return users;
-}
-
-async function createPremiumKey(discordId, authExpire) {
-  const body = {
-    discord_id: String(discordId),
-    note: "Premium",
-  };
-
-  if (authExpire !== null) {
-    body.auth_expire = authExpire;
-  }
-
-  return luarmorRequest(`/projects/${LUARMOR_PROJECT_ID}/users`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
-
-async function updatePremiumKey(userKey, discordId, authExpire) {
-  return luarmorRequest(`/projects/${LUARMOR_PROJECT_ID}/users`, {
-    method: "PATCH",
-    body: JSON.stringify({
-      user_key: userKey,
-      discord_id: String(discordId),
-      note: "Premium",
-      auth_expire: authExpire,
-    }),
-  });
-}
-
-async function deleteLuarmorKey(userKey) {
-  const params = new URLSearchParams({ user_key: userKey });
-  return luarmorRequest(
-    `/projects/${LUARMOR_PROJECT_ID}/users?${params.toString()}`,
-    { method: "DELETE" }
-  );
-}
-
-function calculatePremiumExpiry(duration, existingExpiry = null) {
-  const config = PREMIUM_DURATIONS[duration];
-  if (!config) throw new Error("Unknown Premium duration");
-  if (config.seconds === null) return -1;
-
-  const now = Math.floor(Date.now() / 1000);
-  const current = Number(existingExpiry);
-
-  if (current === -1 || current === 0) {
-    return -1;
-  }
-
-  const base = Number.isFinite(current) && current > now ? current : now;
-  return base + config.seconds;
-}
-
-function premiumExpiryText(authExpire) {
-  if (authExpire === -1 || authExpire === 0 || authExpire == null) {
-    return "Lifetime";
-  }
-  return `<t:${authExpire}:F> (<t:${authExpire}:R>)`;
-}
-
-function maskKey(key) {
-  const value = String(key ?? "");
-  if (value.length <= 12) return value;
-  return `${value.slice(0, 6)}...${value.slice(-6)}`;
-}
-
-async function addPremiumRole(guild, discordId) {
-  const role = await guild.roles.fetch(PREMIUM_ROLE_ID).catch(() => null);
-  if (!role) throw new Error("Premium role was not found in this server");
-
-  const member = await guild.members.fetch(discordId).catch(() => null);
-  if (!member) throw new Error("The selected user is not in this server");
-
-  if (!member.roles.cache.has(role.id)) {
-    await member.roles.add(role, "LixHub Premium whitelist created");
-  }
-
-  return member;
-}
-
-async function handlePremiumWhitelist(interaction) {
-  if (interaction.user.id !== OWNER_ID) {
-    await interaction.reply({
-      content: "You cannot use this command.",
-      ephemeral: true,
-    });
-    return;
-  }
-
-  if (!interaction.guild) {
-    await interaction.reply({
-      content: "This command can only be used inside the LixHub server.",
-      ephemeral: true,
-    });
-    return;
-  }
-
-  await interaction.deferReply({ ephemeral: true });
-
-  const target = interaction.options.getUser("user", true);
-  const duration = interaction.options.getString("duration", true);
-  const mode = interaction.options.getString("mode", true);
-  const sendDm = interaction.options.getBoolean("send_dm", true);
-  const durationConfig = PREMIUM_DURATIONS[duration];
-
-  if (!durationConfig) {
-    await interaction.editReply("Invalid Premium duration.");
-    return;
-  }
-
-  try {
-    const existingUsers = await getLuarmorUsersByDiscordId(target.id);
-    const existing = existingUsers[0] ?? null;
-    let userKey;
-    let authExpire;
-    let action;
-
-    if (mode === "extend" && existing) {
-      authExpire = calculatePremiumExpiry(duration, existing.auth_expire);
-      await updatePremiumKey(existing.user_key, target.id, authExpire);
-      userKey = existing.user_key;
-      action = existing.note === "Premium" ? "Extended" : "Upgraded to Premium";
-    } else {
-      authExpire = calculatePremiumExpiry(duration);
-
-      if (mode === "new" && existing?.user_key) {
-        if (existing.note !== "Premium") {
-          throw new Error(
-            `This user already has a non-Premium Luarmor key (${existing.note || "no note"}). ` +
-              "Use Extend to upgrade that key, or choose a different Discord user for a separate key."
-          );
-        }
-
-        await deleteLuarmorKey(existing.user_key);
-      }
-
-      const created = await createPremiumKey(
-        target.id,
-        authExpire === -1 ? null : authExpire
-      );
-      userKey = created.user_key;
-      action = existing && mode === "new" ? "Replaced with new key" : "Created";
-    }
-
-    if (!userKey) {
-      throw new Error("Luarmor did not return a user key");
-    }
-
-    await addPremiumRole(interaction.guild, target.id);
-
-    let dmStatus = "Not requested";
-    if (sendDm) {
-      try {
-        await target.send({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("LixHub Premium")
-              .setDescription("Your LixHub Premium access is ready.")
-              .addFields(
-                { name: "Key", value: `\`${userKey}\``, inline: false },
-                {
-                  name: "Duration",
-                  value: durationConfig.label,
-                  inline: true,
-                },
-                {
-                  name: "Expires",
-                  value: premiumExpiryText(authExpire),
-                  inline: true,
-                }
-              ),
-          ],
-        });
-        dmStatus = "Sent";
-      } catch (error) {
-        console.warn(`Could not DM Premium key to ${target.id}:`, error.message);
-        dmStatus = "Failed";
-      }
-    }
-
-    const resultEmbed = new EmbedBuilder()
-      .setTitle("Premium Whitelist Updated")
-      .addFields(
-        { name: "User", value: `<@${target.id}>`, inline: true },
-        { name: "Action", value: action, inline: true },
-        { name: "Duration", value: durationConfig.label, inline: true },
-        { name: "Expires", value: premiumExpiryText(authExpire), inline: false },
-        { name: "Key", value: `\`${userKey}\``, inline: false },
-        { name: "DM", value: dmStatus, inline: true },
-        { name: "Premium role", value: "Added / already present", inline: true }
-      )
-      .setFooter({ text: `Key preview: ${maskKey(userKey)}` });
-
-    await interaction.editReply({ embeds: [resultEmbed] });
-  } catch (error) {
-    console.error("Premium whitelist failed:", error);
-    await interaction.editReply({
-      content: `Premium whitelist failed: ${error.message || "Unknown error"}`,
-      embeds: [],
-    });
-  }
-}
-
-async function syncPremiumRoles(readyClient) {
-  const premiumUsers = await getAllPremiumLuarmorUsers();
-  const now = Math.floor(Date.now() / 1000);
-  const byDiscordId = new Map();
-
-  for (const user of premiumUsers) {
-    if (user.note !== "Premium") continue;
-    const discordId = String(user.discord_id ?? "").trim();
-    if (!/^\d+$/.test(discordId)) continue;
-
-    const list = byDiscordId.get(discordId) ?? [];
-    list.push(user);
-    byDiscordId.set(discordId, list);
-  }
-
-  for (const guild of readyClient.guilds.cache.values()) {
-    const role = await guild.roles.fetch(PREMIUM_ROLE_ID).catch(() => null);
-    if (!role) continue;
-
-    for (const [discordId, users] of byDiscordId) {
-      const hasActivePremium = users.some((user) => {
-        const expiry = Number(user.auth_expire);
-        return expiry === -1 || expiry === 0 || !Number.isFinite(expiry) || expiry > now;
-      });
-
-      const member = await guild.members.fetch(discordId).catch(() => null);
-      if (!member) continue;
-
-      const hasRole = member.roles.cache.has(role.id);
-      if (hasActivePremium && !hasRole) {
-        await member.roles.add(role, "LixHub Premium sync").catch((error) => {
-          console.warn(`Could not add Premium role to ${discordId}:`, error.message);
-        });
-      } else if (!hasActivePremium && hasRole) {
-        await member.roles.remove(role, "LixHub Premium expired").catch((error) => {
-          console.warn(`Could not remove expired Premium role from ${discordId}:`, error.message);
-        });
-      }
-    }
-  }
-}
 
 function isAllowedLocation(channel) {
   const isAllowedChannel = ALLOWED_CHANNEL_IDS.has(channel.id);
